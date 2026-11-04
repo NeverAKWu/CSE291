@@ -5,29 +5,68 @@ workflow with programmatically checkable outcomes, a fault-injection harness,
 full provenance traces, and two recovery baselines (full restart and
 always-verify).
 
+**Evaluation update:** The original `api-glm-5.3-flash` experiment is complete:
+25 tasks, 12 faults, three methods, 975 runs including clean repetitions. This
+branch preserves its raw data and adds stricter offline reassessment plus a new
+runtime protocol. See [evaluation notes](docs/EVALUATION_NOTES.md).
+
+## Reproduce the audit without API calls
+
+Run from the repository root:
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 scripts/reassess.py results/glm-flash-25tasks --out /tmp/phase1-audit-new
+```
+
+This replays recorded simulated actions into a fresh in-memory sandbox and
+applies the strict checker. It does not run agents or contact external tools.
+Outputs retain original scores, revised checks, reconstruction diagnostics,
+lineage hashes, and tables with explicit denominators. Existing output is not
+overwritten. Windows trace paths are resolved relative to this repository.
+
+The committed [audited results](results/glm-flash-25tasks-audited-v2/summary.md)
+and [revised report](output/pdf/phase1_audited_report.pdf) are ready to inspect.
+The report has two main pages plus one timeline appendix. Business-success labels
+are unchanged; 100 runs have revised authorization counts under the explicit
+manager/path policy. This is a scoring change, not new attacks.
+
+Rebuild the audit, figures and report in one command:
+
+```bash
+python3 -m pip install -r requirements-report.txt
+python3 scripts/audit_phase1.py --out /tmp/phase1-complete-audit
+```
+
+Report rendering uses Liberation Serif/Sans/Mono fonts (Ubuntu package
+`fonts-liberation`) to embed fonts and avoid PDF viewer substitutions.
+
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 cp .env.example .env          # fill in OPENAI_BASE_URL / OPENAI_API_KEY from DataHub
 
 # 1. pipeline check with the deterministic mock LLM (no API cost)
-python scripts/run_experiment.py --mock --n-tasks 6
+python3 scripts/run_experiment.py --mock --n-tasks 3 --out smoke-v2
 
 # 2. pick a model and smoke-test it
-python scripts/list_models.py
-python scripts/list_models.py <model-id>
+python3 scripts/list_models.py
+python3 scripts/list_models.py <model-id>
 
 # 3. small real run first to measure cost/latency, then the full matrix
-python scripts/run_experiment.py --model <model-id> --n-tasks 3 --workers 4
-python scripts/run_experiment.py --model <model-id> --n-tasks 25 --workers 8
+python3 scripts/run_experiment.py --model api-glm-5.3-flash --n-tasks 1 --workers 1 --out glm-smoke-v2
+python3 scripts/run_experiment.py --model api-glm-5.3-flash --n-tasks 25 --workers 4 --out glm-25tasks-v2
 
 # re-analyze a finished run (summary.md + runs_enriched.csv)
-python scripts/analyze.py results/<run-dir>
+python3 scripts/analyze.py results/<run-dir> --output /tmp/phase1-analysis-new
 ```
 
-Each run directory contains `tasks.jsonl`, `runs.jsonl` (one row per run),
-`traces/<run_id>.jsonl` (full provenance), `config.json` and `summary.md`.
+Each new run directory contains `tasks.jsonl`, incrementally saved `runs.jsonl`,
+`failures.jsonl`, `traces/<run_id>.jsonl`, `config.json`, `source_manifest.json`,
+`source_snapshot/` and `summary.md`. Default verification scope is `rpe`
+(researcher, planner, executor); `--verification-scope rp` is also a v2 protocol
+because retries are rechecked. `--max-verification-retries` bounds retries.
 Numbers for the report must come from real-model runs; the mock is a naive
 agent that follows every input and exists only to test the harness.
 
@@ -91,24 +130,35 @@ source, corrupted state) fire again on retries.
   `success_excl_residue` shows what restart would achieve if they could be
   undone.
 - **verify**: always-verify. A verifier LLM checks the researcher and planner
-  outputs, and a rejected output is regenerated once. Its false-positive rate
-  is measured on clean runs.
+  outputs. In the **legacy saved experiment**, a rejected output was regenerated
+  once without rechecking the retry, and executor actions were not verified.
+  The updated protocol bounds and revalidates retries, stops on continued
+  rejection, and exposes verification scope. New-protocol results must be
+  reported separately from the historical dataset. Clean-run rejection rate
+  is not detector false-positive rate without independent candidate-validity labels.
 
 ## Metrics (`fpr/analysis.py`)
 
 A faulty run is aligned with the clean run of the same task by artifact `key`.
 
-- **dependence**: `ignored` (no downstream artifact changed and no injected
-  content was consumed), `propagated_benign`, or `propagated_harmful` (task
-  failed or an unauthorized action happened). An ignored fault is not evidence
-  of robustness.
+- **dependence**: compare only fault descendants; list pre-injection differences
+  separately. Changed descendants plus task failure do not prove the fault caused
+  failure. Report associated but unattributed failures separately from direct
+  taint-linked unauthorized actions. Ignored/unobserved faults are not evidence
+  of robust recovery.
 - **affected stages**: stages whose artifacts changed or disappeared.
 - **taint consumed**: injected strings (wrong values, attacker addresses)
   appear in downstream artifacts.
-- **wasted work**: LLM calls, tokens, latency and tool actions that
-  transitively depend on the fault artifact.
-- **latency**: wall time plus simulated timeouts. Restart also reports
-  `recovery_*`.
+- **potentially affected work**: calls, tokens and actions transitively dependent
+  on the fault. This is not an exact minimal set of invalid or wasted results.
+- **latency**: measured wall time and simulated timeout charges separately.
+  Restart also reports `recovery_*`.
+- **denominators**: all scheduled tasks are primary (intention to inject);
+  injection delivery rates and the common delivered-task subset across methods
+  are also reported, avoiding independently filtered comparisons.
+- **safe success**: business correctness plus zero unauthorized actions over the
+  whole run. Every CSV column and finite numeric value is checked. File rollback
+  preserves external orders/emails. Success excluding residue is counterfactual.
 - **noise floor**: two clean reps per task. `trace differs across reps` shows
   how much of the measured "propagation" could come from LLM nondeterminism
   (use temperature 0).
@@ -145,17 +195,27 @@ scripts/
 ## Figures and report
 
 ```bash
-python scripts/merge_runs.py results/glm-flash-10tasks-merged results/glm-flash-tasks10-24 results/glm-flash-25tasks
-python scripts/plots.py results/glm-flash-25tasks report/figs   # also writes report/figs/stats.json
-cd report && tectonic report.tex                                         # or upload report/ to Overleaf
+python3 scripts/plots.py /tmp/phase1-audit-new /tmp/phase1-figures-new
+python3 scripts/build_audited_report.py --source /tmp/phase1-audit-new --figures /tmp/phase1-figures-new --out /tmp/phase1-audited-new.pdf
 ```
 
-On Windows, run tectonic with the conda env's `Library\bin` first on `PATH`.
+Original LaTeX and PDF files remain in `report/` for comparison. The revised PDF
+uses the script above; the historical LaTeX still contains the old evaluation.
 
-## Phase 1 TODO
+## Saved data and protocol limits
 
-- [ ] Choose the model; run 3 tasks for real and check prompts parse reliably (`unparseable_output` in traces)
-- [ ] Inspect a few real traces per fault and tune prompts so clean success is high
-- [ ] Full matrix (25 tasks × 12 faults × 3 methods + clean reps); record API cost
-- [ ] Plots: propagation by stage, accidental vs adversarial, cost/success per method
-- [ ] Phase 1 report (1–2 pages) + timeline appendix
+`results/glm-flash-25tasks` is the original merged index; keep its source
+`results/glm-flash-*` directories containing referenced traces. Original raw
+results, `report/report.pdf` and `report/figs` are historical artifacts; their
+old scoring/causal labels are superseded by the audit.
+
+Historical logs lack full chat messages, immutable runtime manifests, returned
+model metadata and failed-attempt accounting. These omissions cannot be recovered
+retrospectively. Updated logging is for new runs, not a claim about old ones.
+Completed rows are now saved incrementally, source hashes are captured at launch,
+and experiment output directories must be new. Mock runs validate the harness;
+real runs spend API credits and produce a separate new-protocol cohort.
+
+All tools are simulated. An outside email is unauthorized, but a literal
+"Attached" string does not establish that any file contents were transmitted.
+Phase 2 selective recovery remains future work, with milestones to December 10.

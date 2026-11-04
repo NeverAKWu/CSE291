@@ -39,21 +39,27 @@ class Tracer:
         self.artifacts: list[Artifact] = []
         self.by_id: dict[str, Artifact] = {}
         self._t0 = time.perf_counter()
+        self.tracking_overhead_s = 0.0
 
     def add(self, kind: str, producer: str, content, *, key: str, inputs=(), llm=None,
             injected: bool = False, **meta) -> str:
+        started = time.perf_counter()
+        llm_data = None
+        if llm is not None:
+            llm_data = asdict(llm)
+            llm_data["raw_response"] = llm_data.pop("text")
+            llm_data["latency"] = round(llm.latency, 6)
         aid = f"a{len(self.artifacts):03d}"
         art = Artifact(
             id=aid, key=key, kind=kind, producer=producer, content=content,
             inputs=[i for i in inputs if i], hash=content_hash(content),
             t=round(time.perf_counter() - self._t0, 4),
-            llm=None if llm is None else {"prompt_tokens": llm.prompt_tokens,
-                                          "completion_tokens": llm.completion_tokens,
-                                          "latency": round(llm.latency, 4), "model": llm.model},
+            llm=llm_data,
             injected=injected, meta=meta,
         )
         self.artifacts.append(art)
         self.by_id[aid] = art
+        self.tracking_overhead_s += time.perf_counter() - started
         return aid
 
     def descendants(self, roots) -> set[str]:

@@ -5,3 +5,5 @@ __pycache__/
 # mock runs are for pipeline checks only; real-model results are committed
 results/mock-*/
 results/*-mock/
+results/smoke-*/
+output/audit-*/

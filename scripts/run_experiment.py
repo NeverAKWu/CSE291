@@ -1,96 +1,140 @@
-"""Run the Phase 1 experiment matrix.
+"""Run a versioned matrix, saving each completion and a frozen source manifest.
 
-  python scripts/run_experiment.py --mock --n-tasks 5                 # pipeline check, no API cost
-  python scripts/run_experiment.py --model <name> --n-tasks 25 --workers 8
-
-Per task: 2 clean runs (determinism check), 1 clean run with the verifier
-(false positives), then every fault x every method under the same schedule.
+Use --mock for a zero-cost pipeline check. Existing output directories are never
+reused: merge or analyze their saved results separately.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+from importlib import metadata
 import json
 import os
+from pathlib import Path
+import platform
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from fpr.analysis import summarize  # noqa: E402
 from fpr.faults import FAULTS  # noqa: E402
 from fpr.llm import make_llm  # noqa: E402
 from fpr.methods import METHODS, run_one  # noqa: E402
 from fpr.tasks import make_task  # noqa: E402
+from fpr.workflow import PROTOCOL_VERSION  # noqa: E402
+
+
+def freeze_sources(out_dir: Path) -> tuple[dict, str]:
+    """Persist exactly the source bytes whose hashes the launch records."""
+    sources = sorted(ROOT.glob("fpr/*.py")) + sorted(ROOT.glob("scripts/*.py"))
+    sources += [ROOT / name for name in ("requirements.txt",) if (ROOT / name).exists()]
+    hashes = {}
+    for source in sources:
+        relative = source.relative_to(ROOT)
+        data = source.read_bytes()
+        hashes[str(relative)] = hashlib.sha256(data).hexdigest()
+        target = out_dir / "source_snapshot" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    digest = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
+    (out_dir / "source_manifest.json").write_text(json.dumps(
+        {"sha256": digest, "files": hashes}, indent=2) + "\n", encoding="utf-8")
+    return hashes, digest
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default=os.environ.get("FPR_MODEL", "gpt-4o-mini"))
-    ap.add_argument("--mock", action="store_true", help="use the deterministic mock LLM")
+    ap.add_argument("--model", default=os.environ.get("FPR_MODEL", "api-glm-5.3-flash"))
+    ap.add_argument("--mock", action="store_true")
     ap.add_argument("--n-tasks", type=int, default=5)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--task-offset", type=int, default=0,
-                    help="first task index; tasks are deterministic per (seed, index), so runs can be extended")
-    ap.add_argument("--faults", default="all", help="comma-separated fault names, or 'all'")
+    ap.add_argument("--task-offset", type=int, default=0)
+    ap.add_argument("--faults", default="all")
     ap.add_argument("--methods", default=",".join(METHODS))
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--out", default=None)
-    ap.add_argument("--skip-clean", action="store_true", help="only fault runs (to patch an existing result dir)")
+    ap.add_argument("--skip-clean", action="store_true")
+    ap.add_argument("--verification-scope", choices=("rp", "rpe"), default="rpe")
+    ap.add_argument("--max-verification-retries", type=int, default=1)
+    ap.add_argument("--max-tokens", type=int, default=2048)
     args = ap.parse_args()
-
+    if args.n_tasks < 1 or args.workers < 1 or args.max_verification_retries < 0 or args.max_tokens < 1:
+        ap.error("tasks/workers/max-tokens must be positive; verification retries nonnegative")
     faults = list(FAULTS) if args.faults == "all" else args.faults.split(",")
     methods = args.methods.split(",")
     unknown = [f for f in faults if f not in FAULTS] + [m for m in methods if m not in METHODS]
     if unknown:
-        sys.exit(f"unknown fault/method: {unknown}")
+        ap.error(f"unknown fault/method: {unknown}")
+    if len(set(faults)) != len(faults) or len(set(methods)) != len(methods):
+        ap.error("duplicate fault/method would collide run IDs")
 
     name = args.out or time.strftime("%Y%m%d-%H%M%S") + ("-mock" if args.mock else "")
-    out_dir = os.path.join("results", name)
-    trace_dir = os.path.join(out_dir, "traces")
-    os.makedirs(trace_dir, exist_ok=True)
-
-    llm = make_llm(args.model, args.mock)
+    out_dir = ROOT / "results" / name
+    # Create once, before API clients are initialized; no silent overwrites.
+    out_dir.mkdir(parents=True, exist_ok=False)
+    trace_dir = out_dir / "traces"
+    trace_dir.mkdir()
+    hashes, source_hash = freeze_sources(out_dir)
     tasks = [make_task(i, args.seed) for i in range(args.task_offset, args.task_offset + args.n_tasks)]
-    with open(os.path.join(out_dir, "tasks.jsonl"), "w", encoding="utf-8") as f:
-        for t in tasks:
-            f.write(json.dumps(t.to_dict()) + "\n")
-
+    with (out_dir / "tasks.jsonl").open("x", encoding="utf-8") as stream:
+        for task in tasks:
+            stream.write(json.dumps(task.to_dict()) + "\n")
     jobs = []
-    for t in tasks:
+    for task in tasks:
         if not args.skip_clean:
-            jobs += [(t, None, "none", 0), (t, None, "none", 1)]
+            jobs += [(task, None, "none", 0), (task, None, "none", 1)]
             if "verify" in methods:
-                jobs.append((t, None, "verify", 0))
-        jobs += [(t, f, m, 0) for f in faults for m in methods]
-    print(f"{len(jobs)} runs -> {out_dir}")
-
-    rows, failed = [], 0
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futs = {pool.submit(run_one, t, llm, f, m, trace_dir, rep): (t.task_id, f, m) for t, f, m, rep in jobs}
-        for i, fut in enumerate(as_completed(futs), 1):
+                jobs.append((task, None, "verify", 0))
+        jobs += [(task, fault, method, 0) for fault in faults for method in methods]
+    try:
+        openai_version = metadata.version("openai")
+    except metadata.PackageNotFoundError:
+        openai_version = None
+    environment = {"python": platform.python_version(), "python_implementation": platform.python_implementation(),
+                   "platform": platform.platform(), "openai_version": openai_version}
+    config = {**vars(args), "environment": environment, "faults": faults, "methods": methods, "protocol_version": PROTOCOL_VERSION,
+              "launch_source_sha256": hashes, "source_manifest_sha256": source_hash,
+              "planned_runs": len(jobs), "started_at_unix": time.time(), "status": "running"}
+    config_path = out_dir / "config.json"
+    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    llm = make_llm(args.model, args.mock, max_tokens=args.max_tokens)
+    print(f"{len(jobs)} runs -> {out_dir}", flush=True)
+    rows, failed = [], []
+    # Append+flush each completion so an interrupted matrix retains completed rows.
+    with (out_dir / "runs.jsonl").open("x", encoding="utf-8") as row_stream, \
+            (out_dir / "failures.jsonl").open("x", encoding="utf-8") as failure_stream, \
+            ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futs = {pool.submit(run_one, task, llm, fault, method, str(trace_dir), rep,
+                            args.verification_scope, args.max_verification_retries, source_hash):
+                (task.task_id, fault, method, rep) for task, fault, method, rep in jobs}
+        for index, future in enumerate(as_completed(futs), 1):
             try:
-                rows.append(fut.result())
-            except Exception as e:  # keep going; one API failure should not kill the matrix
-                failed += 1
-                print(f"FAILED {futs[fut]}: {type(e).__name__}: {e}", file=sys.stderr)
-            if i % 20 == 0 or i == len(jobs):
-                print(f"  {i}/{len(jobs)} done")
-
-    rows.sort(key=lambda r: r["run_id"])
-    with open(os.path.join(out_dir, "runs.jsonl"), "w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
-    with open(os.path.join(out_dir, "config.json"), "w", encoding="utf-8") as f:
-        json.dump({**vars(args), "faults": faults, "methods": methods, "failed_runs": failed}, f, indent=2)
-
-    report, _ = summarize(rows)
-    with open(os.path.join(out_dir, "summary.md"), "w", encoding="utf-8") as f:
-        f.write(report)
+                row = future.result()
+                rows.append(row)
+                row_stream.write(json.dumps(row) + "\n")
+                row_stream.flush()
+            except Exception as exc:
+                task_id, fault, method, rep = futs[future]
+                run_id = f"{task_id}__{fault or 'clean'}__{method}__r{rep}"
+                failure = {"run_id": run_id, "error_type": type(exc).__name__,
+                           "trace": str(trace_dir / (run_id + ".jsonl"))}
+                failed.append(failure)
+                failure_stream.write(json.dumps(failure) + "\n")
+                failure_stream.flush()
+                print(f"FAILED {run_id}: {type(exc).__name__}", file=sys.stderr, flush=True)
+            if index % 20 == 0 or index == len(jobs):
+                print(f"  {index}/{len(jobs)} done ({len(failed)} failed)", flush=True)
+    config.update(status="completed_with_failures" if failed else "completed",
+                  completed_runs=len(rows), failed_runs=len(failed), finished_at_unix=time.time())
+    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    report, _ = summarize(rows, result_dir=out_dir, repo_root=ROOT)
+    (out_dir / "summary.md").write_text(report, encoding="utf-8")
     print(report)
-    if failed:
-        print(f"\n{failed} runs failed; see stderr", file=sys.stderr)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

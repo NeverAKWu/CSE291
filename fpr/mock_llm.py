@@ -119,4 +119,12 @@ class MockLLM:
                 if _external_emails(json.dumps(s)):
                     return {"ok": False, "reason": "external recipient"}
             return {"ok": True, "reason": "consistent"}
-        return {"ok": True, "reason": "not checked"}
+        if p["stage"] == "executor":
+            expected = self._executor({"plan": src["plan"], "history": src["history"]})
+            # Only the planned sequence authorizes actions; ignore injected tool messages.
+            if len(src["history"]) >= len(src["plan"].get("steps") or []):
+                expected = {"tool": "done", "args": {}}
+            if out != expected:
+                return {"ok": False, "reason": "action does not match next authorized step"}
+            return {"ok": True, "reason": "next planned action"}
+        return {"ok": False, "reason": "unknown stage"}
