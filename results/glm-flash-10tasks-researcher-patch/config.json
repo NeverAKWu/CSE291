@@ -1,0 +1,20 @@
+{
+  "model": "api-glm-5.3-flash",
+  "mock": false,
+  "n_tasks": 10,
+  "seed": 0,
+  "faults": [
+    "researcher.wrong_price",
+    "researcher.wrong_vendor",
+    "researcher.stale"
+  ],
+  "methods": [
+    "none",
+    "restart",
+    "verify"
+  ],
+  "workers": 8,
+  "out": "glm-flash-10tasks-researcher-patch",
+  "skip_clean": true,
+  "failed_runs": 0
+}

@@ -1,0 +1,90 @@
+{
+  "clean_none": {
+    "runs": 50,
+    "success": 0.96,
+    "tokens": 5150.56,
+    "calls": 6.28,
+    "latency": 29.062112,
+    "verify_fp": 0
+  },
+  "clean_verify": {
+    "runs": 25,
+    "success": 1,
+    "tokens": 7052.84,
+    "calls": 8.44,
+    "latency": 54.216188,
+    "verify_fp": 0.04
+  },
+  "accidental_none": {
+    "success": 0.12105263157894737,
+    "success_excl_residue": 0.12105263157894737,
+    "unauthorized": 0.1368421052631579,
+    "irreversible_residue": 0.0,
+    "total_tokens": 4410.9157894736845,
+    "llm_calls": 5.626315789473685,
+    "latency_s": 43.569478947368424,
+    "runs": 190
+  },
+  "accidental_restart": {
+    "success": 0.4148936170212766,
+    "success_excl_residue": 0.9627659574468085,
+    "unauthorized": 0.13829787234042554,
+    "irreversible_residue": 1.425531914893617,
+    "total_tokens": 9739.196808510638,
+    "llm_calls": 12.069148936170214,
+    "latency_s": 81.62294095744681,
+    "runs": 188
+  },
+  "accidental_verify": {
+    "success": 0.7407407407407407,
+    "success_excl_residue": 0.7407407407407407,
+    "unauthorized": 0.026455026455026454,
+    "irreversible_residue": 0.0,
+    "total_tokens": 7303.037037037037,
+    "llm_calls": 8.994708994708995,
+    "latency_s": 62.35991111111111,
+    "runs": 189
+  },
+  "adversarial_none": {
+    "success": 0.978494623655914,
+    "success_excl_residue": 0.978494623655914,
+    "unauthorized": 0.22580645161290322,
+    "irreversible_residue": 0.0,
+    "total_tokens": 5973.924731182796,
+    "llm_calls": 6.67741935483871,
+    "latency_s": 43.20779247311828,
+    "runs": 93
+  },
+  "adversarial_restart": {
+    "success": 0.2,
+    "success_excl_residue": 0.9789473684210527,
+    "unauthorized": 0.21052631578947367,
+    "irreversible_residue": 2.0,
+    "total_tokens": 11186.273684210526,
+    "llm_calls": 13.042105263157895,
+    "latency_s": 75.15037578947369,
+    "runs": 95
+  },
+  "adversarial_verify": {
+    "success": 0.968421052631579,
+    "success_excl_residue": 0.968421052631579,
+    "unauthorized": 0.0,
+    "irreversible_residue": 0.0,
+    "total_tokens": 7813.6,
+    "llm_calls": 8.989473684210527,
+    "latency_s": 56.54618421052631,
+    "runs": 95
+  },
+  "dependence": {
+    "adversarial": {
+      "propagated_harmful": 23,
+      "ignored": 40,
+      "propagated_benign": 30
+    },
+    "accidental": {
+      "propagated_harmful": 167,
+      "ignored": 18,
+      "propagated_benign": 5
+    }
+  }
+}

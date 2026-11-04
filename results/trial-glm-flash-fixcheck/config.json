@@ -1,0 +1,16 @@
+{
+  "model": "api-glm-5.3-flash",
+  "mock": false,
+  "n_tasks": 3,
+  "seed": 0,
+  "faults": [
+    "researcher.timeout",
+    "planner.wrong_qty"
+  ],
+  "methods": [
+    "none"
+  ],
+  "workers": 8,
+  "out": "trial-glm-flash-fixcheck",
+  "failed_runs": 0
+}

@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+# mock runs are for pipeline checks only; real-model results are committed
+results/mock-*/
+results/*-mock/
