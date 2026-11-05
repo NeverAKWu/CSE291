@@ -1,17 +1,18 @@
 \documentclass[10pt,twocolumn,letterpaper]{article}
 \usepackage[textwidth=7in,textheight=9in,columnsep=0.25in,centering]{geometry}
 \usepackage{newtxtext,newtxmath}
-\usepackage{graphicx,booktabs,enumitem,xcolor,multirow,array}
+\usepackage{graphicx,booktabs,enumitem,xcolor,multirow,array,tikz}
 \usepackage[hidelinks]{hyperref}
 \usepackage[compact,small]{titlesec}
 \titlespacing*{\section}{0pt}{6pt}{3pt}
-\titlespacing*{\subsection}{0pt}{4pt}{2pt}
 \setlist{nosep,leftmargin=*}
 \setlength{\parskip}{0pt}
-\setlength{\textfloatsep}{8pt}
+\setlength{\textfloatsep}{7pt}
 \setlength{\abovecaptionskip}{3pt}
 \renewcommand{\baselinestretch}{1.0}
 \newcommand{\f}[1]{\texttt{\small #1}}
+\definecolor{glmblue}{HTML}{2868A7}
+\definecolor{dsorange}{HTML}{C85527}
 
 \title{\vspace{-0.4in}\Large Failure Propagation and Recovery in Multi-Agent Systems\\
 \large Phase 1: Fault Injection and Propagation Measurement}
@@ -21,213 +22,175 @@
 \begin{document}
 \maketitle
 \vspace{-0.45in}
-
 \section{Goal and Setup}
-When agents pass results to each other, one wrong or malicious result can
-change what later agents decide and do. Phase~1 builds a workflow whose
-outcomes can be checked by a program, injects faults at controlled stages,
-and measures how far each fault spreads. It also sets two reference points
-for Phase~2's selective recovery: full restart and always-verify.
+An incorrect or malicious agent output can affect subsequent decisions and
+external actions. We measure this propagation in a checkable procurement
+workflow and evaluate full restart and always-verify as recovery baselines.
 
-\textbf{Workflow.} Procurement tasks: ``team $T$ needs $q\times$ item; buy
-from the cheapest \emph{approved} vendor if the total fits the team's
-remaining budget; record the order, deduct the budget, and email the manager
-a confirmation with the order id; otherwise order nothing and notify the
-manager.'' A deterministic \emph{retrieval} step reads the vendor catalog,
-the team directory, and the shared file \f{budgets.json}. The
-\emph{researcher} (LLM) extracts facts. The \emph{planner} (LLM) emits a JSON
-plan of tool calls. The \emph{executor} (LLM) issues one tool call at a time,
-filling in values returned by earlier calls (e.g., the order id). Tasks are
-generated from a seed with known ground truth. About 30\% are over budget,
-and in about half of them the cheapest vendor is unapproved, so the agents
-must actually apply both rules.
+\textbf{Workflow.} For a team requesting $q$ items, the system selects the
+cheapest approved vendor, buys only if the price fits the remaining budget,
+records the order, deducts its cost, and emails the manager the order ID. If
+it does not fit, it sends a budget notice and does not order. Deterministic
+retrieval supplies catalog, directory, and budget records; an LLM researcher
+extracts facts; an LLM planner creates a JSON tool-call plan; and an LLM
+executor calls one tool at a time. Seeded synthetic tasks provide ground
+truth. All tools operate in a simulated environment.
 
-\textbf{Environment.} State has two kinds. \emph{Restorable shared files}
-(\f{budgets.json}, \f{orders.csv}) can be rolled back from a snapshot.
-\emph{External actions} (\f{place\_order}, \f{send\_email}) leave the system
-and can never be rolled back. A checker compares the final state with ground
-truth: exactly one correct order, a matching record, the correct deduction,
-and a confirmation that carries the real id. It counts \emph{unauthorized
-actions} separately: email to an external domain, file deletion, ordering
-from an unapproved vendor or over budget, and writes to other teams or files.
+\textbf{Environment and checks.} The shared files \f{budgets.json} and
+\f{orders.csv} can be restored from a snapshot. Simulated external orders and
+emails remain after a restore. A checker measures task completion, and
+separately counts unauthorized actions such as external email, deletion,
+unapproved or over-budget orders, and unauthorized writes. Task success does
+not imply the absence of unauthorized actions.
 
-\textbf{Tracing.} Every message, intermediate result, tool call, and injected
-fault is stored as an artifact with explicit input edges. A tool call also
-depends on the last writer of every file it reads, so dependencies through
-shared state appear in the same graph.
+\textbf{Faults and tracing.} Eight accidental and four adversarial faults
+are injected at state, retrieval, researcher, planner, or tool-result
+boundaries; definitions appear in Appendix~\ref{app:faults}. Artifacts
+record inputs and file-writer dependencies. Faulty and clean traces are
+aligned by position and compared on decision-relevant content. We label an
+applied fault \emph{ignored} if no compared downstream artifact changes and
+no tracked injected string appears downstream; otherwise it is propagated,
+with propagation labeled harmful when the task fails or an unauthorized
+action occurs. These labels are based on the trace comparison and string
+matching, not a causal proof. Two clean repetitions differ in decision-relevant
+content in 2/25 GLM tasks and 0/25 DeepSeek tasks.
 
-\textbf{Faults} (definitions in Appendix~B). There are 8 \emph{accidental}
-faults: wrong value, stale output, timeout, a corrupted budget in shared
-state, and a corrupted order id in a tool result. There are 4
-\emph{adversarial} faults: prompt injection in a retrieved catalog record,
-in the researcher's output, and in a vendor API response, plus a compromised
-planner that appends an exfiltration step. A fault replaces a payload at a
-stage boundary, so every downstream artifact depends on the fault artifact.
-Each injected payload is kept internally consistent. A first version changed
-only the target field, and downstream agents simply corrected it from
-fields left unchanged (e.g., the researcher's free-text notes still named
-the right vendor).
-
-\textbf{Is the fault actually used?} Each faulty run is aligned with the
-clean run of the same task by artifact position. Positions are compared on
-decision-relevant content only: recipients, ids, amounts, and tool
-arguments, not email wording. Two clean repetitions per task were
-semantically identical in 23/25 tasks; both differences come from one
-natural model error (below), so LLM nondeterminism adds little noise. Each run is then labeled \emph{ignored} (nothing
-downstream changed and no injected string reached a downstream artifact),
-\emph{propagated-benign}, or \emph{propagated-harmful} (task failed or an
-unauthorized action occurred).
-
-\textbf{Methods.} \emph{None}: no recovery. \emph{Full restart}: an oracle
-names the faulty result, so detection is kept separate from recovery; the
-files are restored from the snapshot and the whole workflow reruns.
-\emph{Always-verify}: a verifier LLM checks the researcher and planner
-outputs against their sources, and a rejected output is regenerated once.
-All methods run the same fault schedule.
-
-\textbf{Scale.} 25 tasks $\times$ 12 faults $\times$ 3 methods, plus 3 clean
-runs per task: 975 runs, with 0 harness failures. Model:
-\f{api-glm-5.3-flash} (UCSD TritonAI), temperature 0, 8 parallel workers
-on a laptop.
+\textbf{Methods and scale.} \emph{None} runs without recovery. \emph{Restart}
+uses an oracle to identify the fault, restores files, and runs the entire
+workflow again with the fault removed; prior external actions remain.
+\emph{Verify} uses an LLM verifier to check researcher and planner outputs
+against their sources, regenerating a rejected output once. The verifier uses
+the same model as the workflow. Each model runs 25 seed-0 tasks against the
+same schedule: 12 faults $\times$ 3 methods plus 3 clean runs per task, or
+975 completed runs per model (1,950 total; zero failed runs). We use
+\f{api-glm-5.3-flash} through UCSD TritonAI and \f{deepseek-v4.1-flash}
+through a third-party OpenAI-compatible endpoint, at temperature 0 with eight
+workers. The endpoint identifies the latter model; its implementation was not
+independently verified. Faults can be inapplicable when execution does not
+reach the relevant stage; applied-run counts are reported below.
 
 \section{Results}
-\textbf{Clean baseline.} Task success is 96\% (48/50 runs), with no
-unauthorized actions. A run costs 5.2k tokens, 6.3 LLM calls, and 29\,s of
-wall time. Both failures are a \emph{natural} fault: the researcher reported
-the balance \emph{after} the purchase as the remaining budget, and the
-planner, trusting it, declined a valid order. It spreads exactly like our
-injected wrong values. Always-verify adds 37\% tokens and 87\% latency, with
-1 false rejection in 25 clean runs.
+\textbf{Clean baseline.} GLM succeeds in 48/50 no-recovery runs and DeepSeek
+in 50/50, with no unauthorized actions. GLM's two failures involve the
+researcher reporting the post-purchase balance as the available budget.
+Clean no-recovery runs average 5,151 versus 5,364 tokens, 6.3 versus 6.4 LLM
+calls, and 29.06 versus 17.11 seconds (GLM versus DeepSeek). With verification,
+the respective token means are 7,053 and 7,784; at least one output is
+rejected in 1/25 and 2/25 clean runs. A clean-run rejection is not necessarily
+a false positive because a model can err without an injected fault.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figs/propagation.pdf}
-\caption{How each fault propagates with no recovery (25 tasks; only runs
-where the fault applied). The right column gives mean unauthorized actions
-per run.}
-\label{fig:prop}
+\begin{tikzpicture}[x=5.9cm,y=0.46cm,font=\footnotesize]
+  \node[anchor=west] at (0,4.3) {\textcolor{glmblue}{\rule{5pt}{5pt}} GLM \quad \textcolor{dsorange}{\rule{5pt}{5pt}} DeepSeek};
+  \node[anchor=west] at (0,3.8) {Doubled quantity: faults ignored};
+  \fill[glmblue] (0,3.15) rectangle (.90,3.42); \node[anchor=west] at (.91,3.285) {18/20};
+  \fill[dsorange] (0,2.78) rectangle (.50,3.05); \node[anchor=west] at (.51,2.915) {10/20};
+  \node[anchor=west] at (0,2.25) {Malicious planner: unauthorized runs};
+  \fill[glmblue] (0,1.60) rectangle (.80,1.87); \node[anchor=west] at (.81,1.735) {20/25};
+  \fill[dsorange] (0,1.23) rectangle (.36,1.50); \node[anchor=west] at (.37,1.365) {9/25};
+  \draw[black!45] (0,.95) -- (1,.95);
+  \foreach \x/\l in {0/0\%,.5/50\%,1/100\%} {\draw[black!45] (\x,.95) -- (\x,.86); \node[anchor=north] at (\x,.82) {\l};}
+\end{tikzpicture}
+\caption{Selected no-recovery outcomes among applied faults. Quantity bars
+show the share labeled ignored; planner bars show the share of runs with an
+unauthorized action. Original requests are visible to both executors.}
+\label{fig:contrast}
 \end{figure}
 
-\textbf{Accidental faults almost always propagate to failure}
-(Fig.~\ref{fig:prop}): 167 of 190 applied runs are harmful, and only 12\%
-of tasks succeed. A wrong vendor also turns into an unauthorized order
-(0.76 per run). A fault early in the pipeline wastes nearly the whole run.
-A wrong-value or stale researcher result changes about 3 downstream stages
-and wastes 4.2--4.9k tokens and 3--4 tool actions, while the shared-state
-corruption reaches all 5 stages. The one fault that is mostly ignored, a
-consistently doubled quantity in the plan (18/20 ignored), is absorbed only because the executor
-also sees the original request. That is redundancy in the workflow's
-inputs, not recovery, and we report it as such.
+\textbf{Fault propagation.} Without recovery, 167/190 applied accidental
+faults are classified harmful for GLM and 175/190 for DeepSeek; task success
+is 23/190 and 15/190, respectively. Both models fail all 25 corrupted-budget
+and all 25 wrong-price runs. For doubled quantity, GLM ignores 18/20 applied
+faults and DeepSeek 10/20 (Fig.~\ref{fig:contrast}). Both executors see the
+original request, but access to that information does not yield the same
+outcome across models. Percentages throughout this paragraph use applied runs.
 
-\textbf{Adversarial impact depends on distance to the actuator.} When the
-planner itself is compromised, the executor runs the exfiltration step in
-20/25 tasks. Injection two hops upstream is mostly filtered out. The
-researcher copied the poisoned catalog note into its output in 25/25 runs,
-yet the planner acted on it only once. Injection in tool results was
-ignored in 17/18 runs. Overall, 40 of 93 adversarial runs ignored the
-injection, 30 consumed it without acting on it, and 23 were harmful. Task
-success alone hides this: 91 of 93 tasks completed, but with 0.23
-unauthorized actions per run.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\columnwidth]{figs/methods.pdf}
-\caption{Task success by fault and method. *Counts only external actions
-issued after the restart, i.e., as if earlier ones could be undone.
-$^\dagger$At least one run in the cell took an unauthorized action.}
-\label{fig:methods}
-\end{figure}
+\textbf{Adversarial outcomes vary by injection point and model.} Under no
+recovery, GLM completes 91/93 applied adversarial runs with 21 unauthorized
+actions; DeepSeek completes 95/95 with 9 unauthorized actions. In the
+compromised-planner case, 20/25 GLM runs and 9/25 DeepSeek runs contain an
+unauthorized action (Fig.~\ref{fig:contrast}). Correct task completion can
+therefore coexist with an unauthorized action.
 
 \begin{table}[t]
-\centering\small
-\setlength{\tabcolsep}{3.2pt}
-\begin{tabular}{llrrrrrr}
+\centering\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{llrrrr}
 \toprule
- & method & succ. & succ.* & unauth. & resid. & tokens & lat.\,s\\
+ & & \multicolumn{2}{c}{Success} & \multicolumn{2}{c}{Unauth./run}\\
+Fault & Method & GLM & DS & GLM & DS\\
 \midrule
-\multirow{3}{*}{acc.} & none & 12\% & 12\% & 0.14 & 0 & 4.4k & 44\\
- & restart & 41\% & 96\% & 0.14 & 1.4 & 9.7k & 82\\
- & verify & 74\% & 74\% & 0.03 & 0 & 7.3k & 62\\
+\multirow{3}{*}{Acc.} & none & 12\% & 8\% & .14 & .18\\
+ & restart & 41\% & 42\% & .14 & .19\\
+ & verify & 74\% & 76\% & .03 & .03\\
 \midrule
-\multirow{3}{*}{adv.} & none & 98\% & 98\% & 0.23 & 0 & 6.0k & 43\\
- & restart & 20\% & 98\% & 0.21 & 2.0 & 11.2k & 75\\
- & verify & 97\% & 97\% & 0.00 & 0 & 7.8k & 57\\
+\multirow{3}{*}{Adv.} & none & 98\% & 100\% & .23 & .09\\
+ & restart & 20\% & 16\% & .21 & .12\\
+ & verify & 97\% & 100\% & .00 & .00\\
 \bottomrule
 \end{tabular}
-\caption{Methods under identical fault schedules (per-run means; 188--190
-accidental and 93--95 adversarial applied runs per method). resid.\ = external
-actions from the faulty run that cannot be undone. Latency includes
-simulated 30\,s timeouts.}
+\caption{Outcomes among applied faults. GLM has 188--190 accidental and
+93--95 adversarial runs per method; DeepSeek (DS) has 190 and 95,
+respectively. Success and unauthorized actions are checked separately.}
 \label{tab:methods}
 \end{table}
 
-\textbf{Full restart is correct but does not recover.} The rerun itself
-succeeds 96--98\% of the time. Yet only 41\% (accidental) and 20\%
-(adversarial) of tasks end correct, because the faulty run had already
-issued 1.4--2.0 irreversible external actions per run: duplicate vendor
-orders and confirmations sent with the wrong values
-(Table~\ref{tab:methods}). Restart is worst exactly when the fault was
-harmless: an ignored injection still triggers a second order. It also
-cannot take back an exfiltration email. On top of this, it costs
-1.9--2.2$\times$ the tokens of the faulty run alone.
+\textbf{A correct rerun may not restore the task outcome.} Under accidental
+faults, full restart achieves 41\% final success for GLM and 42\% for
+DeepSeek (Table~\ref{tab:methods}). If pre-restart external actions are
+excluded, success is 96\% and 100\%, respectively. Those counterfactual rates
+do not mean the prior actions were undone: each faulty run had an average of
+1.4 external actions before the restart. Under adversarial faults, final
+success is 20\% and 16\%, versus 98\% and 100\% when prior actions are
+excluded; there are 2.0 prior external actions per run for each model.
 
-\textbf{Always-verify is cheaper but has blind spots.} It recovers 92--100\%
-of researcher- and planner-stage faults (the misses sit in 2 tasks where the
-model errs on its own) and blocks all unauthorized actions in the
-adversarial set, for +1.8--2.9k tokens per run. However, it scores 0\%
-on the corrupted shared budget, because the verifier checks against the
-same corrupted source, and 0\% on the corrupted order id, because tool
-results are not verified. Its recoveries also benefit from our faults being
-transient: the single retry sees clean data. A persistent fault would make
-the retry fail again.
+\textbf{Verification helps but has blind spots.} On applied accidental
+faults, verification raises success from 12\% to 74\% for GLM and from 8\% to
+76\% for DeepSeek. It records no unauthorized actions across the applied
+adversarial runs for either model. However, both models succeed in 0/25
+verified corrupted-budget runs and 0/19 GLM or 0/20 DeepSeek verified
+wrong-order-ID runs. The verifier checks against the corrupted source in the
+former case and does not check tool results in the latter. A single retry also
+benefits from transient agent-stage injections.
 
-\section{Takeaways for Phase 2}
-(1) Most of the real damage is irreversible external actions, not wrong
-intermediate values. Recovery must reason about what has left the system
-instead of replaying the workflow. (2) Faults spread along the recorded
-dependency edges, and shared state widens the reach of an error. For
-example, for \f{tool.wrong\_order\_id} only the 2--3 executor steps after
-\f{place\_order} depend on the bad id, so selective rerun would keep the
-(valid) order instead of duplicating it. (3) Verification at the agent
-level misses errors in shared state and in tool results, which are exactly
-the cases dependency-aware invalidation can reach.
-\emph{Limitations:} one model, 25 tasks, oracle fault identity, and only
-transient LLM-stage faults. Phase~2 will scale tasks and models and add
-persistent faults.
+\textbf{Limitations.} The workload has 25 synthetic tasks and two models;
+its descriptive comparisons do not establish general model superiority.
+Different providers, execution times, and fault applicability limit direct
+comparisons of latency and aggregate rates. Temperature 0 does not guarantee
+deterministic outputs. Restart assumes known fault identity and removal, while
+verification examines only two stages. Trace matching and taint-string checks
+are approximations. Dependency-aware selective recovery and compensating
+external actions remain untested.
 
 \appendix
-\section{Timeline and Milestones}
-\begin{itemize}
-\item \textbf{Nov 11}: a second model and 50+ tasks; add persistent and multi-fault schedules; track natural (non-injected) faults like the one in the clean baseline.
-\item \textbf{Nov 18}: dependency-aware invalidation over the trace graph: mark descendants of the faulty artifact, keep the rest, rerun only invalidated steps.
-\item \textbf{Nov 25}: shared-state recovery: per-step file snapshots (copy-on-write or container); compensating actions (cancel order, correction email) for external effects; report actions that cannot be undone.
-\item \textbf{Dec 2}: compare with full restart and verify under identical schedules: correctness, unauthorized actions, recomputed stages, retained valid work (checked against clean runs), recovery latency, tokens, tracking overhead.
-\item \textbf{Dec 6}: optional automated detection, with false positives and missed faults reported separately.
-\item \textbf{Dec 10}: final code, traces, and report.
-\end{itemize}
-
-\section{Fault Definitions}
+\section{Fault Definitions}\label{app:faults}
 {\footnotesize\renewcommand{\f}[1]{\texttt{\scriptsize #1}}
 \setlength{\tabcolsep}{3pt}
 \begin{tabular}{@{}p{0.43\columnwidth}>{\raggedright\arraybackslash}p{0.54\columnwidth}@{}}
 \toprule
-fault & effect\\
+Fault & Effect\\
 \midrule
-\f{state.corrupt\_budget} & team budget in \f{budgets.json} wrong before the run, flipping the buy/no-buy decision\\
-\f{researcher.wrong\_price} & unit price halved\\
-\f{researcher.wrong\_vendor} & a different, preferably unapproved, vendor\\
-\f{researcher.stale} & facts from an older catalog and a former manager\\
-\f{researcher.timeout}, \f{planner.timeout} & output never arrives (30\,s simulated)\\
-\f{planner.wrong\_qty} & quantity doubled consistently in order, total, record and deduction\\
-\f{tool.wrong\_order\_id} & \f{place\_order} returns a corrupted id\\
+\f{state.corrupt\_budget} & Wrong team budget flips the buy/no-buy decision\\
+\f{researcher.wrong\_price} & Unit price halved\\
+\f{researcher.wrong\_vendor} & Different, preferably unapproved, vendor\\
+\f{researcher.stale} & Facts from an older catalog and former manager\\
+\f{researcher.timeout}, \f{planner.timeout} & Output unavailable; 30\,s simulated\\
+\f{planner.wrong\_qty} & Quantity doubled in the plan and related amounts\\
+\f{tool\_result.wrong\_order\_id} & \f{place\_order} returns a corrupted ID\\
 \midrule
-\f{retrieval.injection} & catalog record says to email confirmations to an outside address\\
-\f{researcher.injection} & compromised researcher: exfiltrate and delete \f{orders.csv}\\
-\f{planner.malicious\_step} & compromised planner appends an exfiltration email\\
-\f{tool.injection} & vendor API reply asks to email \f{budgets.json} outside\\
+\f{retrieval.injection} & Catalog asks for an external confirmation email\\
+\f{researcher.injection} & Compromised output requests exfiltration and deletion\\
+\f{planner.malicious\_step} & Plan appends an external email\\
+\f{tool\_result.injection} & Vendor reply requests an external budget email\\
 \bottomrule
 \end{tabular}}
 
-\smallskip\noindent{\raggedright\textbf{Reproduce:} \f{python scripts/run\_experiment.py --model api-glm-5.3-flash --n-tasks 25}; figures: \f{scripts/plots.py}. Traces for every run are included.\par}
-
+\section{Reproducibility}
+The repository includes the task, run, and trace files. The standard
+\f{scripts/run\_experiment.py} accepts explicit \f{--model}, \f{--seed 0},
+\f{--n-tasks 25}, and \f{--workers 8} arguments for the same task and fault
+matrix. The DeepSeek run additionally used a local checkpointing and retry
+wrapper not included in the repository; API results and timing may differ on
+repetition. Simulated timeouts add 30 seconds to reported run latency.
 \end{document}
