@@ -5,6 +5,8 @@ workflow with programmatically checkable outcomes, a fault-injection harness,
 full provenance traces, and two recovery baselines (full restart and
 always-verify).
 
+**Team:** Zhijing Wu, Fuming Luo, Evan Chen
+
 ## Quick start
 
 ```bash
@@ -123,11 +125,28 @@ latency), `injected`, and `meta` (external / reversible for tool results).
 Tool results also depend on the last writer of every file they read, so
 dependencies through shared state are captured.
 
+## Results
+
+Phase 1 results for two models, each 25 tasks × 12 faults × 3 methods plus 3
+clean runs per task (975 runs, 0 harness failures):
+
+| Directory | Contents |
+|---|---|
+| `results/glm-flash-25tasks/` | **GLM** (`api-glm-5.3-flash`, UCSD TritonAI): merged `runs.jsonl` + `summary.md`; provenance in `MERGED.md` |
+| `results/glm-flash-10tasks/` | GLM tasks 0–9: source runs and traces |
+| `results/glm-flash-10tasks-researcher-patch/` | GLM tasks 0–9: rerun of `researcher.wrong_price/wrong_vendor/stale` after those faults were made internally consistent (replaces 90 rows above) |
+| `results/glm-flash-tasks10-24/` | GLM tasks 10–24: source runs and traces |
+| `results/deepseek-v41-flash-25tasks/` | **DeepSeek** (`deepseek-v4.1-flash`): all 25 tasks in one run, with traces |
+
+The merged GLM `runs.jsonl` points into the three source directories for
+its traces, so keep them together. Each source directory also has the
+console log of its run (`run.log`).
+
 ## Layout
 
 ```
 fpr/
-  tasks.py      task generator + ground truth
+  tasks.py      task generator + ground truth (deterministic per seed and index)
   env.py        sandbox (restorable files vs irreversible external world), tools
   trace.py      provenance tracer
   llm.py        OpenAI-compatible client, JSON extraction
@@ -139,23 +158,23 @@ fpr/
   methods.py    none / restart / verify
   analysis.py   propagation analysis + summary tables
 scripts/
-  run_experiment.py, analyze.py, list_models.py
+  run_experiment.py   run the matrix (--task-offset extends an earlier run)
+  merge_runs.py       merge/patch result directories
+  analyze.py          re-analyze a result directory
+  plots.py            report figures + stats.json
+  list_models.py      list / smoke-test API models
+results/              see "Results"
 ```
 
-## Figures and report
+## Figures
+
+The report itself (`report/`) is kept out of the repository. To regenerate
+the figures and the numbers quoted in it:
 
 ```bash
+# rebuild the merged GLM result from its sources
+python scripts/merge_runs.py results/glm-flash-10tasks results/glm-flash-10tasks-researcher-patch results/glm-flash-10tasks-merged
 python scripts/merge_runs.py results/glm-flash-10tasks-merged results/glm-flash-tasks10-24 results/glm-flash-25tasks
+
 python scripts/plots.py results/glm-flash-25tasks report/figs   # also writes report/figs/stats.json
-cd report && tectonic report.tex                                         # or upload report/ to Overleaf
 ```
-
-On Windows, run tectonic with the conda env's `Library\bin` first on `PATH`.
-
-## Phase 1 TODO
-
-- [ ] Choose the model; run 3 tasks for real and check prompts parse reliably (`unparseable_output` in traces)
-- [ ] Inspect a few real traces per fault and tune prompts so clean success is high
-- [ ] Full matrix (25 tasks × 12 faults × 3 methods + clean reps); record API cost
-- [ ] Plots: propagation by stage, accidental vs adversarial, cost/success per method
-- [ ] Phase 1 report (1–2 pages) + timeline appendix

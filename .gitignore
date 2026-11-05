@@ -5,3 +5,7 @@ __pycache__/
 # mock runs are for pipeline checks only; real-model results are committed
 results/mock-*/
 results/*-mock/
+# intermediate of the GLM merge (see README "Figures")
+results/glm-flash-10tasks-merged/
+# report sources and PDF are kept locally, not in the repo
+report/
