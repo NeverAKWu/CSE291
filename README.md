@@ -162,6 +162,7 @@ scripts/
   merge_runs.py       merge/patch result directories
   analyze.py          re-analyze a result directory
   plots.py            report figures + stats.json
+  report_figs.py      two-model figure + per-fault numbers for the Phase 1 report
   list_models.py      list / smoke-test API models
 results/              see "Results"
 ```
@@ -177,4 +178,5 @@ python scripts/merge_runs.py results/glm-flash-10tasks results/glm-flash-10tasks
 python scripts/merge_runs.py results/glm-flash-10tasks-merged results/glm-flash-tasks10-24 results/glm-flash-25tasks
 
 python scripts/plots.py results/glm-flash-25tasks report/figs   # also writes report/figs/stats.json
+python scripts/report_figs.py report/figs GLM=results/glm-flash-25tasks DS=results/deepseek-v41-flash-25tasks
 ```
