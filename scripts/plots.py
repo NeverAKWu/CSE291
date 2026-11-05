@@ -32,20 +32,31 @@ def label(f):
     return f.replace("tool_result.", "tool.")
 
 
+def compact_label(f):
+    """Keep fault names readable at the report's 3.375-inch column width."""
+    return (f.replace("researcher.", "R.").replace("planner.", "P.")
+            .replace("retrieval.", "KB.").replace("state.corrupt_budget", "state.budget")
+            .replace("tool_result.wrong_order_id", "tool.wrong_id")
+            .replace("tool_result.", "tool."))
+
+
 def fault_order(rows):
     metadata = {r["fault"]: (r["category"], STAGES.index(r["stage"]) if r["stage"] in STAGES else 99)
                 for r in rows if r["fault"] != "clean"}
     return sorted(metadata, key=lambda fault: (metadata[fault], fault))
 
 
-def _save(fig, out, name):
-    fig.tight_layout(pad=0.4)
+def _save(fig, out, name, compact=False):
+    # Compact figures use explicit margins so saving preserves the printed font
+    # size and exact column width instead of shrinking a wide analysis figure.
+    if not compact:
+        fig.tight_layout(pad=0.4)
     fig.savefig(out / (name + ".pdf"))
     fig.savefig(out / (name + ".png"), dpi=200)
     plt.close(fig)
 
 
-def fig_propagation(rows, out):
+def fig_propagation(rows, out, compact=False):
     none = [r for r in rows if r["method"] == "none" and r["fault"] != "clean"]
     faults = fault_order(none)
     if not faults:
@@ -55,7 +66,7 @@ def fig_propagation(rows, out):
                   ("propagated_harmful", "direct harmful evidence", ORANGE),
                   ("propagated_failure_unattributed", "failure, attribution uncertain", "#8b70b4"),
                   ("propagation_unobserved", "ancestry unobserved", "#656565")]
-    fig, ax = plt.subplots(figsize=(6.6, 3.7))
+    fig, ax = plt.subplots(figsize=(3.35, 2.8) if compact else (6.6, 3.7))
     for yi, fault in enumerate(faults[::-1]):
         subset = [r for r in none if r["fault"] == fault]
         counts = Counter(r.get("dependence", "propagation_unobserved") for r in subset)
@@ -65,19 +76,29 @@ def fig_propagation(rows, out):
             if width:
                 ax.barh(yi, width, left=left, height=0.65, color=color, edgecolor=SURFACE, linewidth=0.6)
             left += width
-        ax.text(1.01, yi, f"n={len(subset)}", va="center", fontsize=7)
-    ax.set_yticks(range(len(faults)), [label(f) for f in faults[::-1]], fontsize=7)
+        if not compact:
+            ax.text(1.01, yi, f"n={len(subset)}", va="center", fontsize=7)
+    row_label = compact_label if compact else label
+    ax.set_yticks(range(len(faults)), [row_label(f) for f in faults[::-1]], fontsize=7)
     ax.set_xlim(0, 1)
     ax.set_xticks([0, .5, 1], ["0%", "50%", "100%"])
-    ax.set_xlabel("All scheduled no-recovery runs, including undelivered faults")
+    ax.tick_params(axis="x", labelsize=7 if compact else 8)
+    ax.set_xlabel("Scheduled no-recovery runs (ITT)" if compact else
+                  "All scheduled no-recovery runs, including undelivered faults", fontsize=7 if compact else 8)
     handles = [plt.Rectangle((0, 0), 1, 1, color=color) for _, _, color in categories]
-    ax.legend(handles, [name for _, name, _ in categories], loc="lower center", bbox_to_anchor=(.5, 1.01),
-              ncol=2, frameon=False, fontsize=7)
+    if compact:
+        fig.subplots_adjust(left=.29, right=.95, bottom=.16, top=.79)
+        fig.legend(handles, ["Undelivered", "Ignored", "Benign", "Direct harm", "Unattributed", "Unobserved"],
+                   loc="upper center", bbox_to_anchor=(.5, .995), ncol=3, frameon=False,
+                   fontsize=7, handlelength=1.1, handletextpad=.35, columnspacing=.7, labelspacing=.4)
+    else:
+        ax.legend(handles, [name for _, name, _ in categories], loc="lower center", bbox_to_anchor=(.5, 1.01),
+                  ncol=2, frameon=False, fontsize=7)
     ax.spines[["top", "right"]].set_visible(False)
-    _save(fig, out, "propagation")
+    _save(fig, out, "propagation", compact)
 
 
-def fig_methods(rows, out):
+def fig_methods(rows, out, compact=False):
     faulty = [r for r in rows if r["fault"] != "clean"]
     faults = fault_order(faulty)
     if not faults:
@@ -95,21 +116,26 @@ def fig_methods(rows, out):
         grid.append(values)
         labels.append(annotations)
     cmap = LinearSegmentedColormap.from_list("seq", ["#ffffff", "#cde2fb", "#3987e5", "#0d366b"])
-    fig, ax = plt.subplots(figsize=(6.6, 3.7))
+    fig, ax = plt.subplots(figsize=(3.35, 2.85) if compact else (6.6, 3.7))
     ax.imshow(grid, cmap=cmap, vmin=0, vmax=1, aspect="auto")
     for i, row in enumerate(grid):
         for j, value in enumerate(row):
             ax.text(j, i, labels[i][j], ha="center", va="center", fontsize=7,
                     color=SURFACE if value > .55 else TEXT)
-    ax.set_xticks(range(len(columns)), [c[2] for c in columns], fontsize=7)
+    headers = ["N:C", "N:S", "R:C", "R:S", "V:C", "V:S"] if compact else [c[2] for c in columns]
+    ax.set_xticks(range(len(columns)), headers, fontsize=7)
     ax.xaxis.tick_top()
-    ax.set_yticks(range(len(faults)), [label(f) for f in faults], fontsize=7)
-    ax.set_xlabel("Correct / scheduled runs (ITT); irreversible actions remain in the outcome")
+    row_label = compact_label if compact else label
+    ax.set_yticks(range(len(faults)), [row_label(f) for f in faults], fontsize=7)
+    ax.set_xlabel("Successes / scheduled runs (ITT)" if compact else
+                  "Correct / scheduled runs (ITT); irreversible actions remain in the outcome", fontsize=7 if compact else 8)
     ax.tick_params(length=0)
-    _save(fig, out, "methods")
+    if compact:
+        fig.subplots_adjust(left=.29, right=.985, bottom=.105, top=.91)
+    _save(fig, out, "methods", compact)
 
 
-def fig_stages(rows, out):
+def fig_stages(rows, out, compact=False):
     faulty = [r for r in rows if r["fault"] != "clean" and r["method"] == "none"]
     faults = fault_order(faulty)
     stages = ["retrieval", "researcher", "planner", "executor", "tool_result"]
@@ -120,17 +146,22 @@ def fig_stages(rows, out):
         subset = [r for r in faulty if r["fault"] == fault]
         grid.append([sum(stage in r.get("affected_stages", []) for r in subset) / len(subset) for stage in stages])
         denominators.append(len(subset))
-    fig, ax = plt.subplots(figsize=(5.3, 3.7))
+    fig, ax = plt.subplots(figsize=(3.35, 2.85) if compact else (5.3, 3.7))
     ax.imshow(grid, cmap="Blues", vmin=0, vmax=1, aspect="auto")
     for i, row in enumerate(grid):
         for j, value in enumerate(row):
             ax.text(j, i, f"{round(value * denominators[i])}/{denominators[i]}", ha="center", va="center", fontsize=7,
                     color=SURFACE if value > .55 else TEXT)
-    ax.set_yticks(range(len(faults)), [label(f) for f in faults], fontsize=7)
-    ax.set_xticks(range(len(stages)), [s.replace("tool_result", "tool result") for s in stages], rotation=20)
-    ax.set_xlabel("Runs with a changed fault descendant / all scheduled no-recovery runs")
+    row_label = compact_label if compact else label
+    ax.set_yticks(range(len(faults)), [row_label(f) for f in faults], fontsize=7)
+    headers = ["KB", "R", "P", "Exec.", "Tool"] if compact else [s.replace("tool_result", "tool result") for s in stages]
+    ax.set_xticks(range(len(stages)), headers, rotation=0 if compact else 20, fontsize=7 if compact else 8)
+    ax.set_xlabel("Changed descendant / scheduled runs" if compact else
+                  "Runs with a changed fault descendant / all scheduled no-recovery runs", fontsize=7 if compact else 8)
     ax.tick_params(length=0)
-    _save(fig, out, "affected_stages")
+    if compact:
+        fig.subplots_adjust(left=.29, right=.985, bottom=.16, top=.985)
+    _save(fig, out, "affected_stages", compact)
 
 
 def stats(rows, out):
@@ -143,6 +174,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--compact", action="store_true",
+                        help="3.35-inch print figures for the two-column report; uses abbreviated labels")
     args = parser.parse_args()
     if args.output.resolve() == args.source.resolve():
         parser.error("figure output must differ from experiment input")
@@ -154,9 +187,9 @@ def main():
     rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
     if not enriched.is_file():
         rows = enrich(rows, result_dir=args.source)
-    fig_propagation(rows, args.output)
-    fig_methods(rows, args.output)
-    fig_stages(rows, args.output)
+    fig_propagation(rows, args.output, compact=args.compact)
+    fig_methods(rows, args.output, compact=args.compact)
+    fig_stages(rows, args.output, compact=args.compact)
     print(json.dumps(stats(rows, args.output), indent=2))
 
 

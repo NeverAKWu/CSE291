@@ -1,0 +1,21 @@
+{
+  "renderer": "LaTeX",
+  "compiler": "Tectonic 0.17.0",
+  "source": "report/report.tex",
+  "source_sha256": "ac7831f2116b516e3a38e2d765349e7a946850fa02758e0d3ac6b64e2980941d",
+  "source_runs_sha256": "f30225f77fdc8a20f7134b5ed5da2338b5973d1231bbba429840601397a537b1",
+  "audit_stats_sha256": "22a8878e48e105466d18c94669a095422155d4dba7ae86d15eac983dbb42b9ac",
+  "audit_lineage_sha256": "1a314935754a29cd1030b9ac895cee2c21423e6204e0edb9341b0a78b45e6c17",
+  "figure_sha256": {
+    "propagation.pdf": "41244ec3827f2822158e105a8a0b9a3719a07e94ac48e7c4806556a512112a8e",
+    "methods.pdf": "70ef14ae3b4e9f0a119aa8cadb863f996adfe3ffdbe6d899e6d8d1157b488c0e",
+    "affected_stages.pdf": "09d3be21f7ef70fb2c7fa2b3f1c93878b56e1c0afb2b7d4be76367f70f212f90"
+  },
+  "pdf_sha256": "9c69eac42716421799fb221ac08986f423a89c9ac819fa07ff57d8e499fb8c9b",
+  "log_sha256": "5c338c45af643566b50cbb1a82c26b422bbbffdacc5108375b41b48dc23eb697",
+  "untrusted_mode": true,
+  "overfull_hbox_warnings": 0,
+  "overfull_vbox_warnings": 0,
+  "undefined_reference_warnings": 0,
+  "protocol": "historical R/P verification; no new model inference"
+}

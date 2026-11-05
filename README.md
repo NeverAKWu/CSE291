@@ -35,11 +35,22 @@ Rebuild the audit, figures and report in one command:
 
 ```bash
 python3 -m pip install -r requirements-report.txt
+python3 scripts/install_tectonic.py
 python3 scripts/audit_phase1.py --out /tmp/phase1-complete-audit
 ```
 
-Report rendering uses Liberation Serif/Sans/Mono fonts (Ubuntu package
-`fonts-liberation`) to embed fonts and avoid PDF viewer substitutions.
+The report uses the teammate's LaTeX template: 10pt, two columns, Letter paper,
+7 x 9 inch text area and Times fonts. Install the compiler once on Linux x86_64:
+
+```bash
+python3 scripts/install_tectonic.py
+```
+
+See [LaTeX build instructions](report/README.md) for other platforms, direct
+editing, and Overleaf. The primary source/PDF are `report/report.tex` and
+`report/report.pdf`; the download under `output/pdf/` is an identical copy.
+An [Overleaf source ZIP](artifacts/phase1_latex_source.zip) includes the `.tex`
+and all vector figures with the required folder structure.
 
 ## Quick start
 
@@ -195,19 +206,20 @@ scripts/
 ## Figures and report
 
 ```bash
-python3 scripts/plots.py /tmp/phase1-audit-new /tmp/phase1-figures-new
+python3 scripts/plots.py /tmp/phase1-audit-new /tmp/phase1-figures-new --compact
 python3 scripts/build_audited_report.py --source /tmp/phase1-audit-new --figures /tmp/phase1-figures-new --out /tmp/phase1-audited-new.pdf
 ```
 
-Original LaTeX and PDF files remain in `report/` for comparison. The revised PDF
-uses the script above; the historical LaTeX still contains the old evaluation.
+The script compiles `report/report.tex` with Tectonic and saves compiler/source/
+data hashes alongside the PDF. Original teammate source/PDF are archived in
+`report/legacy/`; original analysis figures remain in `report/figs/`.
 
 ## Saved data and protocol limits
 
 `results/glm-flash-25tasks` is the original merged index; keep its source
 `results/glm-flash-*` directories containing referenced traces. Original raw
-results, `report/report.pdf` and `report/figs` are historical artifacts; their
-old scoring/causal labels are superseded by the audit.
+results and `report/figs` are historical artifacts. The original report is in
+`report/legacy/`; the primary `report/report.tex` and PDF use the audited scores.
 
 Historical logs lack full chat messages, immutable runtime manifests, returned
 model metadata and failed-attempt accounting. These omissions cannot be recovered

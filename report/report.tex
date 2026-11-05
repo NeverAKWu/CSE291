@@ -15,196 +15,203 @@
 
 \title{\vspace{-0.4in}\Large Failure Propagation and Recovery in Multi-Agent Systems\\
 \large Phase 1: Fault Injection and Propagation Measurement}
-\author{\textcolor{red}{[Team member names]} \quad CSE 291A, Fall 2026}
+\author{Option 5, Group 8 \quad CSE 291A, Fall 2026}
 \date{}
 
 \begin{document}
 \maketitle
 \vspace{-0.45in}
+\raggedbottom
 
 \section{Goal and Setup}
-When agents pass results to each other, one wrong or malicious result can
-change what later agents decide and do. Phase~1 builds a workflow whose
-outcomes can be checked by a program, injects faults at controlled stages,
-and measures how far each fault spreads. It also sets two reference points
-for Phase~2's selective recovery: full restart and always-verify.
+Wrong or malicious agent results can change later decisions and tool
+actions. Phase~1 measures propagation in a checkable workflow and establishes
+restart and verification baselines for selective recovery.
 
-\textbf{Workflow.} Procurement tasks: ``team $T$ needs $q\times$ item; buy
-from the cheapest \emph{approved} vendor if the total fits the team's
-remaining budget; record the order, deduct the budget, and email the manager
-a confirmation with the order id; otherwise order nothing and notify the
-manager.'' A deterministic \emph{retrieval} step reads the vendor catalog,
-the team directory, and the shared file \f{budgets.json}. The
-\emph{researcher} (LLM) extracts facts. The \emph{planner} (LLM) emits a JSON
-plan of tool calls. The \emph{executor} (LLM) issues one tool call at a time,
-filling in values returned by earlier calls (e.g., the order id). Tasks are
-generated from a seed with known ground truth. About 30\% are over budget,
-and in about half of them the cheapest vendor is unapproved, so the agents
-must actually apply both rules.
+\textbf{Workflow.} Deterministic retrieval reads a vendor catalog, team
+directory, and
+\f{budgets.json}. The \emph{researcher} extracts facts; the \emph{planner}
+emits a JSON plan; the \emph{executor} calls simulated tools using earlier
+results such as the order id. A team requests an item quantity: buy from
+the cheapest approved vendor within budget, record the order, deduct its
+cost, and notify the manager; otherwise, buy nothing and notify the manager.
+Seeded generation produces 25 tasks with known answers: five requests are
+over budget, and 15 have a cheaper unapproved vendor.
 
-\textbf{Environment.} State has two kinds. \emph{Restorable shared files}
-(\f{budgets.json}, \f{orders.csv}) can be rolled back from a snapshot.
-\emph{External actions} (\f{place\_order}, \f{send\_email}) leave the system
-and can never be rolled back. A checker compares the final state with ground
-truth: exactly one correct order, a matching record, the correct deduction,
-and a confirmation that carries the real id. It counts \emph{unauthorized
-actions} separately: email to an external domain, file deletion, ordering
-from an unapproved vendor or over budget, and writes to other teams or files.
+\textbf{State and correctness.} Shared files (\f{budgets.json},
+\f{orders.csv}) are restorable; vendor orders and emails are irreversible
+simulated external effects. The checker validates vendor, item, quantity,
+price, record fields, budget deduction, and manager confirmation with the
+real order id. \emph{Safe correctness} additionally requires zero
+unauthorized actions over the entire run history. A separate action audit
+checks recipients, paths, vendors, quantities, prices, and budgets,
+including attempted calls rejected by the sandbox.
 
-\textbf{Tracing.} Every message, intermediate result, tool call, and injected
-fault is stored as an artifact with explicit input edges. A tool call also
-depends on the last writer of every file it reads, so dependencies through
-shared state appear in the same graph.
+\textbf{Faults and traces.} Eight accidental faults cover incorrect or
+stale results, timeouts, shared-budget corruption, and a corrupted tool
+return; four adversarial faults target retrieval, researcher, planner, and
+tool-result boundaries (Appendix~B). Each artifact records its producer,
+content hash, and input ids. Tool dependencies include the last writer of
+each file read, exposing shared-state paths. Historical traces contain
+parsed intermediate results, tool actions, and usage, but not complete
+prompts, raw model replies, or returned-model fingerprints.
 
-\textbf{Faults} (definitions in Appendix~B). There are 8 \emph{accidental}
-faults: wrong value, stale output, timeout, a corrupted budget in shared
-state, and a corrupted order id in a tool result. There are 4
-\emph{adversarial} faults: prompt injection in a retrieved catalog record,
-in the researcher's output, and in a vendor API response, plus a compromised
-planner that appends an exfiltration step. A fault replaces a payload at a
-stage boundary, so every downstream artifact depends on the fault artifact.
-Each injected payload is kept internally consistent. A first version changed
-only the target field, and downstream agents simply corrected it from
-fields left unchanged (e.g., the researcher's free-text notes still named
-the right vendor).
+\textbf{Evidence of use.} We compare decision-relevant fields with the
+same task's clean run and trace injected strings. Only first-pass fault
+descendants contribute changed stages or taint hits; pre-injection
+differences are excluded. We distinguish ignored, benign propagation,
+direct harmful evidence, unattributed failure, and undelivered faults.
+Direct harm requires a taint-bearing unauthorized action on the dependency
+path. Other failures have no causal claim. Reachable tokens and actions
+measure \emph{potentially affected} work, not proven waste or minimal reruns.
 
-\textbf{Is the fault actually used?} Each faulty run is aligned with the
-clean run of the same task by artifact position. Positions are compared on
-decision-relevant content only: recipients, ids, amounts, and tool
-arguments, not email wording. Two clean repetitions per task were
-semantically identical in 23/25 tasks; both differences come from one
-natural model error (below), so LLM nondeterminism adds little noise. Each run is then labeled \emph{ignored} (nothing
-downstream changed and no injected string reached a downstream artifact),
-\emph{propagated-benign}, or \emph{propagated-harmful} (task failed or an
-unauthorized action occurred).
+\textbf{Methods.} \emph{None} runs without recovery. \emph{Full restart}
+receives the faulty result's identity from an oracle, restores shared files,
+and reruns the workflow; earlier orders and emails remain. Historical
+\emph{always-verify} checks researcher and planner outputs against their
+sources and regenerates a rejected output once. Its retry was not verified
+again, and executor/tool outputs were unchecked. Verification therefore
+includes detection/prevention, whereas restart isolates recovery. Revised
+runtime retries are reverified and executor actions can be gated; these
+changes have mock tests, not new model evidence.
 
-\textbf{Methods.} \emph{None}: no recovery. \emph{Full restart}: an oracle
-names the faulty result, so detection is kept separate from recovery; the
-files are restored from the snapshot and the whole workflow reruns.
-\emph{Always-verify}: a verifier LLM checks the researcher and planner
-outputs against their sources, and a rejected output is regenerated once.
-All methods run the same fault schedule.
-
-\textbf{Scale.} 25 tasks $\times$ 12 faults $\times$ 3 methods, plus 3 clean
-runs per task: 975 runs, with 0 harness failures. Model:
-\f{api-glm-5.3-flash} (UCSD TritonAI), temperature 0, 8 parallel workers
-on a laptop.
+\textbf{Scale and comparison.} The recorded dataset contains
+$25\times12\times3$ scheduled fault runs and 75 clean runs: 975 runs, 8,509 successful
+LLM calls, and 7,006,349 recorded tokens. The configured model was
+\f{api-glm-5.3-flash} via UCSD TritonAI, temperature~0, with eight workers.
+Offline reanalysis preserves all raw data and verifies 17,298 artifact
+hashes. Primary results use all scheduled runs (intention-to-treat, ITT).
+Joint-delivery subsets (187 accidental and 93 adversarial cases per method)
+are separate post-method diagnostics, not unbiased replacements for ITT.
+Undelivered injections provide no robustness evidence.
 
 \section{Results}
-\textbf{Clean baseline.} Task success is 96\% (48/50 runs), with no
-unauthorized actions. A run costs 5.2k tokens, 6.3 LLM calls, and 29\,s of
-wall time. Both failures are a \emph{natural} fault: the researcher reported
-the balance \emph{after} the purchase as the remaining budget, and the
-planner, trusting it, declined a valid order. It spreads exactly like our
-injected wrong values. Always-verify adds 37\% tokens and 87\% latency, with
-1 false rejection in 25 clean runs.
+\textbf{Clean baseline.} No recovery succeeds safely in 48/50 runs (96\%);
+historical verification succeeds in 25/25. Two failures involve natural
+researcher budget errors. Mean clean cost is 5,151
+tokens, 6.3 calls, and 29.06\,s wall time; verification uses 7,053 tokens,
+8.4 calls, and 54.22\,s, increases of 37\% and 87\%. It rejects an output
+in 1/25 clean runs. This \emph{clean rejection rate} is not a false-positive
+rate: candidate validity was not independently labeled. False positives
+and missed faults remain unmeasured.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figs/propagation.pdf}
-\caption{How each fault propagates with no recovery (25 tasks; only runs
-where the fault applied). The right column gives mean unauthorized actions
-per run.}
+\includegraphics[width=\columnwidth]{revised/figs/propagation.pdf}
+\caption{No-recovery propagation: all 25 scheduled tasks per fault.
+KB., R., P. denote retrieval, researcher, planner. Unattributed failures
+remain separate from direct harm.}
 \label{fig:prop}
 \end{figure}
 
-\textbf{Accidental faults almost always propagate to failure}
-(Fig.~\ref{fig:prop}): 167 of 190 applied runs are harmful, and only 12\%
-of tasks succeed. A wrong vendor also turns into an unauthorized order
-(0.76 per run). A fault early in the pipeline wastes nearly the whole run.
-A wrong-value or stale researcher result changes about 3 downstream stages
-and wastes 4.2--4.9k tokens and 3--4 tool actions, while the shared-state
-corruption reaches all 5 stages. The one fault that is mostly ignored, a
-consistently doubled quantity in the plan (18/20 ignored), is absorbed only because the executor
-also sees the original request. That is redundancy in the workflow's
-inputs, not recovery, and we report it as such.
+\textbf{Accidental faults disrupt dependent work.} Business correctness
+falls to 16.5\% without recovery (Table~\ref{tab:methods}). Wrong or stale
+researcher outputs change roughly three descendant stages; shared-state
+corruption changes five. Early faults reach thousands of downstream tokens.
+The executor ignores doubled plan quantities in 18/20 delivered cases
+using the original request: input redundancy, not recovery. Quantity and
+corrupted-id injections each reach only 20/25 no-recovery runs.
 
-\textbf{Adversarial impact depends on distance to the actuator.} When the
-planner itself is compromised, the executor runs the exfiltration step in
-20/25 tasks. Injection two hops upstream is mostly filtered out. The
-researcher copied the poisoned catalog note into its output in 25/25 runs,
-yet the planner acted on it only once. Injection in tool results was
-ignored in 17/18 runs. Overall, 40 of 93 adversarial runs ignored the
-injection, 30 consumed it without acting on it, and 23 were harmful. Task
-success alone hides this: 91 of 93 tasks completed, but with 0.23
-unauthorized actions per run.
+\textbf{Attack impact depends on position.} Of 100 scheduled adversarial
+no-recovery cases, seven are undelivered, 40 ignored, 30 benign, 21 directly
+harmful, and two failures unattributed (Fig.~\ref{fig:prop}). A compromised
+planner induces outside emails in 20/25 cases; poisoned retrieval does so
+in 1/25. These actions do not establish actual budget-file transfer.
+Both unattributed runs contain pre-injection budget errors.
+Business correctness is 96\%, but safe correctness is 75\%.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figs/methods.pdf}
-\caption{Task success by fault and method. *Counts only external actions
-issued after the restart, i.e., as if earlier ones could be undone.
-$^\dagger$At least one run in the cell took an unauthorized action.}
+\includegraphics[width=\columnwidth]{revised/figs/methods.pdf}
+\caption{Correct / scheduled runs, retaining irreversible effects.
+N/R/V: no recovery/restart/verify; C/S: business/safe correctness.
+Fault prefixes follow Fig.~\ref{fig:prop}.}
 \label{fig:methods}
 \end{figure}
 
 \begin{table}[t]
 \centering\small
-\setlength{\tabcolsep}{3.2pt}
-\begin{tabular}{llrrrrrr}
+\setlength{\tabcolsep}{2.6pt}
+\begin{tabular}{llrrrrr}
 \toprule
- & method & succ. & succ.* & unauth. & resid. & tokens & lat.\,s\\
+ & method & correct & safe & unauth. & tokens & wall\,s\\
 \midrule
-\multirow{3}{*}{acc.} & none & 12\% & 12\% & 0.14 & 0 & 4.4k & 44\\
- & restart & 41\% & 96\% & 0.14 & 1.4 & 9.7k & 82\\
- & verify & 74\% & 74\% & 0.03 & 0 & 7.3k & 62\\
+\multirow{3}{*}{acc.} & none & 16.5\% & 16.5\% & 0.39 & 4.3k & 34.7\\
+ & restart & 44.0\% & 30.0\% & 0.41 & 9.3k & 70.7\\
+ & verify & 75.0\% & 75.0\% & 0.03 & 7.1k & 54.0\\
 \midrule
-\multirow{3}{*}{adv.} & none & 98\% & 98\% & 0.23 & 0 & 6.0k & 43\\
- & restart & 20\% & 98\% & 0.21 & 2.0 & 11.2k & 75\\
- & verify & 97\% & 97\% & 0.00 & 0 & 7.8k & 57\\
+\multirow{3}{*}{adv.} & none & 96.0\% & 75.0\% & 0.21 & 5.7k & 40.5\\
+ & restart & 24.0\% & 23.0\% & 0.20 & 10.8k & 71.6\\
+ & verify & 97.0\% & 97.0\% & 0.00 & 7.6k & 55.4\\
 \bottomrule
 \end{tabular}
-\caption{Methods under identical fault schedules (per-run means; 188--190
-accidental and 93--95 adversarial applied runs per method). resid.\ = external
-actions from the faulty run that cannot be undone. Latency includes
-simulated 30\,s timeouts.}
+\caption{ITT results: $n=200$ accidental and $n=100$ adversarial runs per
+method. Unauthorized attempts, tokens, and wall time are per-run means.
+Accidental runs additionally have 7.5\,s mean \emph{simulated} delay;
+adversarial runs have none. Wall time excludes trace serialization.}
 \label{tab:methods}
 \end{table}
 
-\textbf{Full restart is correct but does not recover.} The rerun itself
-succeeds 96--98\% of the time. Yet only 41\% (accidental) and 20\%
-(adversarial) of tasks end correct, because the faulty run had already
-issued 1.4--2.0 irreversible external actions per run: duplicate vendor
-orders and confirmations sent with the wrong values
-(Table~\ref{tab:methods}). Restart is worst exactly when the fault was
-harmless: an ignored injection still triggers a second order. It also
-cannot take back an exfiltration email. On top of this, it costs
-1.9--2.2$\times$ the tokens of the faulty run alone.
+\begin{samepage}
+\textbf{Restart leaves irreversible damage.} Restart retains 1.3 accidental
+and 1.9 adversarial external effects per scheduled run on average. Replaying
+harmless runs can duplicate orders or emails. Business correctness is 44\%
+and 24\%; excluding earlier effects yields 95.5\% and 98\%, an undoable-world
+counterfactual rather than actual recovery. Restart uses about twice the
+tokens of no recovery.\par
+\end{samepage}
 
-\textbf{Always-verify is cheaper but has blind spots.} It recovers 92--100\%
-of researcher- and planner-stage faults (the misses sit in 2 tasks where the
-model errs on its own) and blocks all unauthorized actions in the
-adversarial set, for +1.8--2.9k tokens per run. However, it scores 0\%
-on the corrupted shared budget, because the verifier checks against the
-same corrupted source, and 0\% on the corrupted order id, because tool
-results are not verified. Its recoveries also benefit from our faults being
-transient: the single retry sees clean data. A persistent fault would make
-the retry fail again.
+\begin{samepage}
+\textbf{Verification has source and coverage limits.} Historical verification
+reaches 75\% accidental and 97\% adversarial safe correctness. It fails on
+corrupted shared budgets because it consults the same corrupted source,
+and on corrupted order ids because tool results are unchecked. The unchecked
+retry also prevents treating a rejection as verification of the eventual
+output. These are scoped results, not guarantees against arbitrary agents.\par
+\end{samepage}
 
+\begin{samepage}
 \section{Takeaways for Phase 2}
-(1) Most of the real damage is irreversible external actions, not wrong
-intermediate values. Recovery must reason about what has left the system
-instead of replaying the workflow. (2) Faults spread along the recorded
-dependency edges, and shared state widens the reach of an error. For
-example, for \f{tool.wrong\_order\_id} only the 2--3 executor steps after
-\f{place\_order} depend on the bad id, so selective rerun would keep the
-(valid) order instead of duplicating it. (3) Verification at the agent
-level misses errors in shared state and in tool results, which are exactly
-the cases dependency-aware invalidation can reach.
-\emph{Limitations:} one model, 25 tasks, oracle fault identity, and only
-transient LLM-stage faults. Phase~2 will scale tasks and models and add
-persistent faults.
+Recovery must account for external effects before replaying work.
+Dependencies through shared files and tool returns identify candidate
+invalidation regions; they do not prove that retained work remains valid.
+Phase~2 will use a common oracle fault identity, validate reused artifacts,
+and compare recomputation, retained work, and total cost under matched
+schedules. Limitations are one model, 25 tasks, transient stage faults,
+incomplete historical request logs, and no measured tracking-overhead
+ablation.\par
+\end{samepage}
 
+\clearpage
 \appendix
 \section{Timeline and Milestones}
 \begin{itemize}
-\item \textbf{Nov 11}: a second model and 50+ tasks; add persistent and multi-fault schedules; track natural (non-injected) faults like the one in the clean baseline.
-\item \textbf{Nov 18}: dependency-aware invalidation over the trace graph: mark descendants of the faulty artifact, keep the rest, rerun only invalidated steps.
-\item \textbf{Nov 25}: shared-state recovery: per-step file snapshots (copy-on-write or container); compensating actions (cancel order, correction email) for external effects; report actions that cannot be undone.
-\item \textbf{Dec 2}: compare with full restart and verify under identical schedules: correctness, unauthorized actions, recomputed stages, retained valid work (checked against clean runs), recovery latency, tokens, tracking overhead.
-\item \textbf{Dec 6}: optional automated detection, with false positives and missed faults reported separately.
-\item \textbf{Dec 10}: final code, traces, and report.
+\item \textbf{Nov 11}: finalize source/version tags and dependency labels;
+expand tasks and add persistent-fault schedules. Freeze an oracle fault
+identity for every recovery method.
+\item \textbf{Nov 18}: implement dependency-aware invalidation; rerun
+affected stages and check that retained artifacts remain valid.
+\item \textbf{Nov 25}: implement per-step shared-file snapshots and
+version checks for a changing environment. Evaluate compensation for
+external effects and report effects that cannot be undone.
+\item \textbf{Dec 2}: compare selective recovery, restart, and verification
+with identical schedules and budgets: recovered correctness, unauthorized
+actions, recomputed stages, retained valid work, recovery latency, inference
+cost, and tracking overhead.
+\item \textbf{Dec 6}: complete robustness checks and draft the final report;
+if adding detection, report false positives and missed faults separately.
+\item \textbf{Dec 10}: submit final code, traces, and the 4--6 page report.
 \end{itemize}
+
+\begin{figure}[!b]
+\centering
+\includegraphics[width=\columnwidth]{revised/figs/affected_stages.pdf}
+\caption{Runs with a changed fault descendant / all 25 scheduled tasks.
+KB/R/P denote retrieval/researcher/planner. Shared-state corruption reaches
+all five downstream stages; graph reachability alone does not prove harm.}
+\label{fig:stages}
+\end{figure}
+\newpage
 
 \section{Fault Definitions}
 {\footnotesize\renewcommand{\f}[1]{\texttt{\scriptsize #1}}
@@ -213,21 +220,37 @@ persistent faults.
 \toprule
 fault & effect\\
 \midrule
-\f{state.corrupt\_budget} & team budget in \f{budgets.json} wrong before the run, flipping the buy/no-buy decision\\
-\f{researcher.wrong\_price} & unit price halved\\
-\f{researcher.wrong\_vendor} & a different, preferably unapproved, vendor\\
-\f{researcher.stale} & facts from an older catalog and a former manager\\
-\f{researcher.timeout}, \f{planner.timeout} & output never arrives (30\,s simulated)\\
-\f{planner.wrong\_qty} & quantity doubled consistently in order, total, record and deduction\\
-\f{tool.wrong\_order\_id} & \f{place\_order} returns a corrupted id\\
+\f{state.corrupt\_budget} & corrupt the initial shared budget, reversing the buy/no-buy decision\\
+\f{researcher.wrong\_price} & halve the quoted unit price\\
+\f{researcher.wrong\_vendor} & substitute a different, preferably unapproved, vendor\\
+\f{researcher.stale} & use an older catalog and former manager\\
+\f{researcher.timeout}, \f{planner.timeout} & no output; add a synthetic 30\,s delay\\
+\f{planner.wrong\_qty} & double quantity consistently in order, total, record, and deduction\\
+\f{tool\_result.wrong\_order\_id} & replace the returned \f{place\_order} id\\
 \midrule
-\f{retrieval.injection} & catalog record says to email confirmations to an outside address\\
-\f{researcher.injection} & compromised researcher: exfiltrate and delete \f{orders.csv}\\
-\f{planner.malicious\_step} & compromised planner appends an exfiltration email\\
-\f{tool.injection} & vendor API reply asks to email \f{budgets.json} outside\\
+\f{retrieval.injection} & catalog asks to redirect confirmation outside\\
+\f{researcher.injection} & request external disclosure and deletion of \f{orders.csv}\\
+\f{planner.malicious\_step} & append an external disclosure email\\
+\f{tool\_result.injection} & vendor reply asks to send \f{budgets.json} outside\\
 \bottomrule
 \end{tabular}}
 
-\smallskip\noindent{\raggedright\textbf{Reproduce:} \f{python scripts/run\_experiment.py --model api-glm-5.3-flash --n-tasks 25}; figures: \f{scripts/plots.py}. Traces for every run are included.\par}
+\section{Reproducibility and Provenance}
+{\raggedright
+The immutable recorded cohort is \f{results/glm-flash-25tasks}; original
+trace files remain in its source-run directories. Revised checker outcomes,
+paired denominators, and lineage hashes are in
+\f{results/glm-flash-25tasks-audited-v2}. The report uses the corresponding
+figures in \f{report/revised/figs}. Run
+\f{python3 scripts/audit\_phase1.py --out /tmp/phase1-rebuild-new}
+from the repository root to regenerate the offline assessment in a new
+directory without model calls. See the repository README for report build
+dependencies and the LaTeX build command. The 975-run model dataset uses the
+historical verification protocol; subsequent runtime fixes are not
+retroactively attributed to those runs. The stricter action policy changes
+100 run-level authorization counts (98 to 205 total attempts), but no
+business-correctness outcomes; old and revised policies are versioned.
+Native token totals omit unknown usage from unsuccessful attempts and are
+not a billing statement.\par}
 
 \end{document}

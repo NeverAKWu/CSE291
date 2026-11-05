@@ -22,12 +22,18 @@ def main():
     output = args.out.resolve()
     if output.exists():
         parser.error("--out must be new; existing evidence is never overwritten")
-    if any(find_spec(name) is None for name in ("matplotlib", "reportlab")):
+    if find_spec("matplotlib") is None:
         parser.error("install dependencies: python3 -m pip install -r requirements-report.txt")
+    sys.path.insert(0, str(ROOT))
+    from scripts.build_audited_report import find_tectonic
+    try:
+        find_tectonic()
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
     commands = [
         ["-m", "unittest", "discover", "-s", "tests", "-v"],
         ["scripts/reassess.py", "results/glm-flash-25tasks", "--out", str(output / "results")],
-        ["scripts/plots.py", str(output / "results"), str(output / "figs")],
+        ["scripts/plots.py", str(output / "results"), str(output / "figs"), "--compact"],
         ["scripts/build_audited_report.py", "--source", str(output / "results"),
          "--figures", str(output / "figs"), "--out", str(output / "phase1_audited_report.pdf")],
     ]
